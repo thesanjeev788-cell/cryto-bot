@@ -7,11 +7,11 @@ import os
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# ===== OKX FUTURES =====
+# ===== OKX USDT PERPETUAL =====
 exchange = ccxt.okx({
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'swap'   # perpetual futures
+        'defaultType': 'swap'
     }
 })
 
@@ -19,25 +19,33 @@ def send_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": message})
 
-# ===== TOP 50 USDT SWAPS BY VOLUME =====
+# ===== GET TOP 50 USDT SWAPS BY VOLUME =====
 def get_top_50():
     markets = exchange.load_markets()
     tickers = exchange.fetch_tickers()
     pairs = []
 
-    for symbol in markets:
-        if "USDT" in symbol and markets[symbol]['active']:
-            if symbol in tickers:
-                volume = tickers[symbol].get('quoteVolume', 0)
-                pairs.append((symbol, volume))
+    for symbol, market in markets.items():
+        # Only USDT perpetual swaps
+        if market['active'] and market.get('swap') and "USDT" in symbol:
+            ticker = tickers.get(symbol)
+
+            if ticker:
+                volume = ticker.get('quoteVolume')
+
+                if volume is None:
+                    volume = 0
+
+                pairs.append((symbol, float(volume)))
 
     pairs.sort(key=lambda x: x[1], reverse=True)
+
     return [p[0] for p in pairs[:50]]
 
-# ===== STRATEGY =====
+# ===== STRATEGY CHECK =====
 def check_pair(symbol):
     try:
-        # 1H EMA
+        # 1H EMA 200
         ohlc_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
         df1h = pd.DataFrame(ohlc_1h, columns=['t','o','h','l','c','v'])
         df1h['ema200'] = df1h['c'].ewm(span=200).mean()
@@ -60,6 +68,7 @@ def check_pair(symbol):
         signal_2 = df30['signal'].iloc[-3]
         signal_1 = df30['signal'].iloc[-2]
 
+        # Last 1 hour window
         long_recent = (
             (macd_2 < signal_2 and macd_1 > signal_1 and macd_1 < 0) or
             (macd_3 < signal_3 and macd_2 > signal_2 and macd_2 < 0)
@@ -71,10 +80,10 @@ def check_pair(symbol):
         )
 
         if trend_up and long_recent:
-            send_alert(f"🚀 LONG (OKX) {symbol}")
+            send_alert(f"🚀 LONG SIGNAL (OKX Data) {symbol}")
 
         if trend_down and short_recent:
-            send_alert(f"🔻 SHORT (OKX) {symbol}")
+            send_alert(f"🔻 SHORT SIGNAL (OKX Data) {symbol}")
 
     except Exception as e:
         print(f"Error in {symbol}: {e}")
@@ -82,5 +91,5 @@ def check_pair(symbol):
 # ===== MAIN =====
 symbols = get_top_50()
 
-for s in symbols:
-    check_pair(s)
+for symbol in symbols:
+    check_pair(symbol)
